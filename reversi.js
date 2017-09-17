@@ -47,6 +47,7 @@ class Piece extends GameObject {
         this.startAnim = 0;
         this.turnAnim = null;
         this.scale = 80;
+        this.alpha = 1;
     }
 
     get BBox() {
@@ -80,6 +81,8 @@ class Piece extends GameObject {
         this.startAnim = Math.min(this.startAnim + delta / 500, 1);
         scale *= easeOutBack(this.startAnim);
 
+        ctx.globalAlpha = this.alpha;
+
         // handle turn animation
         if (this.turnAnim !== null) {
             this.turnAnim = Math.min(this.turnAnim + delta / 700, 1);
@@ -99,6 +102,7 @@ class Piece extends GameObject {
         ctx.beginPath();
         ctx.arc(x*200+100, y*200+100, scale, 0, Math.PI * 2);
         ctx.fill();
+        ctx.globalAlpha = 1;
     }
 }
 
@@ -117,9 +121,14 @@ class PossibleMove extends Piece {
 
         this.game.nextTurn();
 
-        // check game over
-        if (this.game.board.possibleMoves.length === 0)
-            new GameOver(this.game, this.color, this.pos.x, this.pos.y);
+        // check if there are any possible moves or pass
+        if (this.game.board.possibleMoves.length === 0) {
+            this.game.nextTurn();
+
+            // if no moves left again, game is over
+            if (this.game.board.possibleMoves.length === 0)
+                new GameOver(this.game, this.pos.x, this.pos.y);
+        }
     }
 
     render(ctx, delta) {
@@ -129,6 +138,7 @@ class PossibleMove extends Piece {
             return;
 
         ctx.globalAlpha = 0.2;
+        this.alpha = 0.2;
         if (this.hovering) {
             document.body.style.cursor = "pointer";
 
@@ -140,14 +150,14 @@ class PossibleMove extends Piece {
                 ctx.fill();
             }
 
-            ctx.globalAlpha = 0.7;
+            this.alpha = 0.7;
         }
 
         // pulse for better UX
         this.scale = 80 + Math.pow((+new Date() % 1000 - 500) / 200, 2);
 
         super.render(ctx, delta);
-        ctx.globalAlpha = 1;
+        this.alpha = 1;
     }
 }
 
@@ -192,10 +202,8 @@ class Board extends GameObject {
                 if (this.pieces[cx][cy] === null)
                     break;
 
+                // found same color - push all pieces in between
                 if (this.pieces[cx][cy].color === color) {
-                    if (l.length === 0)
-                        break;
-
                     for (let a of l)
                         ret.push(a);
                     break;
@@ -206,6 +214,19 @@ class Board extends GameObject {
         }
 
         return ret;
+    }
+
+    get count() {
+        let cnt = {b: 0, w: 0};
+        for (let r of this.pieces) {
+            for (let p of r) {
+                if (p === null)
+                    continue;
+                cnt[p.color]++;
+            }
+        }
+
+        return cnt;
     }
 
     nextTurn(color) {
@@ -233,7 +254,7 @@ class Board extends GameObject {
         ctx.fillStyle = '#4caf50';
         ctx.fillRect(0, 0, 1600, 1600);
 
-        // lines
+        // squares
         ctx.lineWidth = 5;
         ctx.strokeStyle = '#212121';
         ctx.fillStyle = '#388e3c';
@@ -247,16 +268,62 @@ class Board extends GameObject {
     }
 }
 
+class ScorePanel extends GameObject {
+    constructor(game) {
+        super(game);
+
+    }
+
+    render(ctx, delta) {
+        let cnt = this.game.board.count;
+
+        // background
+        ctx.fillStyle = '#fafafa';
+        if (this.game.turn === 'b')
+            ctx.fillStyle = '#212121';
+        ctx.fillRect(0, 1600, 1600, 100);
+
+        // colors
+        ctx.fillStyle = "#212121";
+        ctx.beginPath();
+        ctx.arc(700, 1650, 40, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#fafafa";
+        ctx.beginPath();
+        ctx.arc(900, 1650, 40, 0, Math.PI * 2);
+        ctx.fill();
+
+        // score
+        ctx.font = "50px cliche";
+        ctx.textAlign="center";
+        ctx.fillStyle = "#212121";
+        ctx.fillText(cnt.w, 900, 1670);
+        ctx.fillStyle = "#fafafa";
+        ctx.fillText(cnt.b, 700, 1670);
+    }
+}
+
 class GameOver extends Piece {
-    constructor(game, color, x, y) {
+    constructor(game, x, y) {
+        let color = 'b';
+        let cnt = game.board.count;
+        if (cnt.b < cnt.w)
+            color = 'w';
+
         super(game, color, x, y);
         this.endAnim = 0;
+
+        // put score panel to front
+        game.remove(game.scorePanel);
+        this.game.turn = this.color;
+        new ScorePanel(game);
     }
 
     get BBox() {
         return {
             x: 700,
-            y: 900,
+            y: 950,
             width: 250,
             height: 250,
         }
@@ -280,7 +347,7 @@ class GameOver extends Piece {
         ctx.textAlign="center";
         ctx.fillStyle = this.fillColor(true);
         ctx.fillText('\uF091', 800, 600);
-        ctx.fillText('\uF021', 800, 1100);
+        ctx.fillText('\uF021', 800, 1150);
         ctx.globalAlpha = 1;
     }
 }
@@ -292,13 +359,14 @@ class Game {
         this.canvas.onmousemove = (event) => {this.mouseMove(event)};
         this.canvas.onmousedown = (event) => {this.click(event)};
         this.ctx = canvas.getContext('2d');
-        
+
         this.gameObjects = [];
         this.lastTime = +new Date();
         this.mousePos = {x: 0, y: 0};
         this.turn = 'b';
 
         this.board = new Board(this);
+        this.scorePanel = new ScorePanel(this);
 
         window.requestAnimationFrame(() => {this.render()});
     }
@@ -323,7 +391,7 @@ class Game {
     mouseMove(event) {
         let rect = this.canvas.getBoundingClientRect();
         let x = Math.floor((event.clientX - rect.left) / this.canvas.offsetWidth * 1600);
-        let y = Math.floor((event.clientY - rect.top) / this.canvas.offsetHeight * 1600);
+        let y = Math.floor((event.clientY - rect.top) / this.canvas.offsetHeight * 1700);
         this.mousePos = {x, y};
     }
 
